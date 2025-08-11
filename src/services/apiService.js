@@ -3,21 +3,33 @@
 const API_BASE_URL = 'http://localhost:8080';
 
 const handleResponse = async (response) => {
+    // Se a resposta não for bem-sucedida (status 4xx ou 5xx),
+    // sempre trate como um erro.
     if (!response.ok) {
         const errorBody = await response.text();
         try {
+            // Tenta extrair uma mensagem de erro JSON do back-end.
             const errorJson = JSON.parse(errorBody);
             throw new Error(errorJson.message || `Erro ${response.status}`);
         } catch {
+            // Se o corpo do erro não for JSON (ex: um erro de HTML do servidor),
+            // lança o corpo do erro diretamente para facilitar a depuração.
             throw new Error(errorBody || `Erro ${response.status}`);
         }
     }
+
+    // Se a resposta for bem-sucedida (status 2xx), verifique se há conteúdo.
     const contentType = response.headers.get("content-type");
-    if (contentType && contentType.indexOf("application/json") !== -1) {
+    if (contentType && contentType.includes("application/json")) {
+        // Se for JSON, retorna o corpo da resposta em formato JSON.
         return response.json();
     }
-    // Retorna a resposta completa se não for JSON, para casos como DELETE
-    return response;
+
+    // **ESTA É A CORREÇÃO CRÍTICA:**
+    // Para respostas bem-sucedidas mas sem conteúdo JSON (como POST, PUT, ou DELETE
+    // que retornam 200 OK ou 204 No Content), retorna `null`.
+    // Isso sinaliza ao componente que a operação foi um sucesso, mas não há dados para processar.
+    return null;
 };
 
 export const apiService = {
@@ -67,7 +79,6 @@ export const apiService = {
         method: 'POST', headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
         body: JSON.stringify(data),
     }).then(handleResponse),
-    // Corrigido para corresponder à API
     atualizarPagamentoFechamento: (token, id, data) => fetch(`${API_BASE_URL}/api/fechamentos/${id}/pagamento`, {
         method: 'PUT', headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
         body: JSON.stringify(data),

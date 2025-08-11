@@ -42,7 +42,7 @@ const MainLayout = ({ currentPage, onNavigate, onLogout, token, setNotification 
             <aside className={`fixed top-0 left-0 h-full w-64 bg-gray-800 text-white flex flex-col z-30 sidebar-transition md:translate-x-0 ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}>
                 <div className="h-16 flex items-center justify-center border-b border-gray-700">
                     <MilkIcon />
-                    <h1 className="text-xl font-bold ml-2">SMLaticínios</h1>
+                    <h1 className="text-xl font-bold ml-2">Serra Mineira</h1>
                 </div>
                 <nav className="flex-1 px-4 py-6">
                     <ul>

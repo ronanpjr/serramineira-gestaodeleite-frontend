@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import {
-  LineChart, Line, BarChart, Bar, PieChart, Pie, Cell,
+  LineChart, Line, PieChart, Pie, Cell,
   XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer
 } from 'recharts';
 
@@ -21,26 +21,25 @@ const ReportsPage = ({ apiService, token, setNotification }) => {
     const fetchData = async () => {
       setIsLoading(true);
       try {
-        const [producersRes, coletasRes, fechamentosRes] = await Promise.all([
+        // CORRIGIDO: As chamadas da API agora retornam os dados JSON diretamente
+        const [producersData, collectionsData, closingsData] = await Promise.all([
           apiService.getProducers(token),
           apiService.getColetas(token),
           apiService.getFechamentos(token),
         ]);
 
-        if (!producersRes.ok || !coletasRes.ok || !fechamentosRes.ok) {
-          throw new Error('Falha ao carregar dados para os relatórios.');
+        // Garante que os estados sejam sempre arrays para evitar erros
+        setProducers(producersData || []);
+        setCollections(collectionsData || []);
+        setClosings(closingsData || []);
+        
+        // Seleciona todos os produtores por padrão
+        if (producersData) {
+            setSelectedProducers(producersData.map(p => p.id.toString()));
         }
 
-        const producersData = await producersRes.json();
-        setProducers(producersData);
-        setCollections(await coletasRes.json());
-        setClosings(await fechamentosRes.json());
-        
-        // Select all producers by default
-        setSelectedProducers(producersData.map(p => p.id.toString()));
-
       } catch (error) {
-        setNotification({ message: error.message, type: 'error' });
+        setNotification({ message: `Erro ao carregar dados para os relatórios: ${error.message}`, type: 'error' });
       } finally {
         setIsLoading(false);
       }
@@ -62,20 +61,23 @@ const ReportsPage = ({ apiService, token, setNotification }) => {
   const filteredData = useMemo(() => {
     const start = new Date(startDate);
     const end = new Date(endDate);
-    end.setHours(23, 59, 59, 999); // Include the whole end day
+    end.setHours(23, 59, 59, 999);
 
-    const producerMap = new Map(producers.map(p => [p.id, p.name]));
+    // Mapeia IDs de produtor para nomes para fácil acesso
+    const producerMap = new Map(producers.map(p => [p.id, p.nome]));
 
     const filteredCollections = collections.filter(c => {
       const collectionDate = new Date(c.data);
-      const producerId = c.produtor ? c.produtor.id.toString() : c.produtorId.toString();
+      // CORRIGIDO: Assume que a coleta tem `produtorId` ou um objeto `produtor` com `id`
+      const producerId = (c.produtorId || c.produtor?.id)?.toString();
       return collectionDate >= start && collectionDate <= end &&
-             (selectedProducers.length === 0 || selectedProducers.includes(producerId));
+             producerId && (selectedProducers.length === 0 || selectedProducers.includes(producerId));
     });
 
     return filteredCollections.map(c => ({
         ...c,
-        produtorName: producerMap.get(c.produtor ? c.produtor.id : c.produtorId) || 'Desconhecido'
+        // CORRIGIDO: Adiciona o nome do produtor ao dado da coleta
+        produtorName: producerMap.get(c.produtorId || c.produtor?.id) || 'Desconhecido'
     }));
   }, [startDate, endDate, selectedProducers, collections, producers]);
 
@@ -84,12 +86,15 @@ const ReportsPage = ({ apiService, token, setNotification }) => {
 
     const totalLitros = filteredData.reduce((acc, c) => acc + c.quantidadeLitros, 0);
     
-    const daysInRange = (new Date(endDate) - new Date(startDate)) / (1000 * 60 * 60 * 24) + 1;
+    // Calcula a diferença de dias corretamente, evitando divisão por zero
+    const daysInRange = Math.max(1, (new Date(endDate) - new Date(startDate)) / (1000 * 60 * 60 * 24) + 1);
     const mediaDiaria = totalLitros / daysInRange;
     
     const producerTotals = filteredData.reduce((acc, c) => {
-      const prodId = c.produtor ? c.produtor.id : c.produtorId;
-      acc[prodId] = (acc[prodId] || 0) + c.quantidadeLitros;
+      const prodId = c.produtorId || c.produtor?.id;
+      if (prodId) {
+        acc[prodId] = (acc[prodId] || 0) + c.quantidadeLitros;
+      }
       return acc;
     }, {});
 
@@ -103,13 +108,14 @@ const ReportsPage = ({ apiService, token, setNotification }) => {
       }
     }
     
-    // Simplified total value calculation - assumes a single price for all closings in range
+    // CORRIGIDO: Usa o novo schema 'produtorNome' para calcular o valor total
     const relevantClosings = closings.filter(f => {
         const closingDate = new Date(f.ano, f.mes - 1, 1);
-        return closingDate >= new Date(startDate) && closingDate <= new Date(endDate);
+        const producerId = f.produtorId?.toString();
+        return closingDate >= new Date(startDate) && closingDate <= new Date(endDate) &&
+               producerId && (selectedProducers.length === 0 || selectedProducers.includes(producerId));
     });
     const valorTotal = relevantClosings.reduce((acc, f) => acc + f.totalLiquido, 0);
-
 
     return {
       totalLitros: totalLitros.toLocaleString('pt-BR'),
@@ -117,7 +123,7 @@ const ReportsPage = ({ apiService, token, setNotification }) => {
       maiorProdutor,
       valorTotal: valorTotal.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
     };
-  }, [filteredData, producers, closings, startDate, endDate]);
+  }, [filteredData, producers, closings, startDate, endDate, selectedProducers]);
 
   const productionOverTimeData = useMemo(() => {
     const dataByDate = {};
@@ -126,17 +132,20 @@ const ReportsPage = ({ apiService, token, setNotification }) => {
       if (!dataByDate[date]) {
         dataByDate[date] = { name: date };
       }
-      if (!dataByDate[date][c.produtorName]) {
-        dataByDate[date][c.produtorName] = 0;
+      // Garante que o nome do produtor seja o mesmo usado nos filtros
+      const producerName = c.produtorName || 'Desconhecido';
+      if (!dataByDate[date][producerName]) {
+        dataByDate[date][producerName] = 0;
       }
-      dataByDate[date][c.produtorName] += c.quantidadeLitros;
+      dataByDate[date][producerName] += c.quantidadeLitros;
     });
     return Object.values(dataByDate).sort((a,b) => new Date(a.name.split('/').reverse().join('-')) - new Date(b.name.split('/').reverse().join('-')));
   }, [filteredData]);
 
   const productionByProducerData = useMemo(() => {
     const totals = filteredData.reduce((acc, c) => {
-      acc[c.produtorName] = (acc[c.produtorName] || 0) + c.quantidadeLitros;
+      const producerName = c.produtorName || 'Desconhecido';
+      acc[producerName] = (acc[producerName] || 0) + c.quantidadeLitros;
       return acc;
     }, {});
     return Object.entries(totals).map(([name, value]) => ({ name, value }));
@@ -166,7 +175,7 @@ const ReportsPage = ({ apiService, token, setNotification }) => {
         <div>
           <label className="block text-sm font-medium text-gray-700 mb-1">Produtores</label>
           <select multiple value={selectedProducers} onChange={handleProducerSelection} className="input-field h-32">
-            {producers.map(p => <option key={p.id} value={p.id}>{p.nome}</option>)}
+            {producers.map(p => <option key={p.id} value={p.id.toString()}>{p.nome}</option>)}
           </select>
         </div>
       </div>
@@ -176,7 +185,7 @@ const ReportsPage = ({ apiService, token, setNotification }) => {
         <div className="card"><p className="text-gray-500 text-sm">Total de Litros no Período</p><p className="text-2xl font-bold">{summaryCards.totalLitros} L</p></div>
         <div className="card"><p className="text-gray-500 text-sm">Média Diária</p><p className="text-2xl font-bold">{summaryCards.mediaDiaria} L</p></div>
         <div className="card"><p className="text-gray-500 text-sm">Produtor com Maior Coleta</p><p className="text-2xl font-bold">{summaryCards.maiorProdutor}</p></div>
-        <div className="card"><p className="text-gray-500 text-sm">Valor Total à Pagar</p><p className="text-2xl font-bold">{summaryCards.valorTotal}</p></div>
+        <div className="card"><p className="text-gray-500 text-sm">Valor Total Pago</p><p className="text-2xl font-bold">{summaryCards.valorTotal}</p></div>
       </div>
 
       {/* --- Gráficos --- */}

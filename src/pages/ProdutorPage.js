@@ -1,5 +1,5 @@
-// src/ProdutorPage.js
-import React, { useState, useEffect } from 'react';
+// src/pages/ProdutorPage.js
+import React, { useState, useEffect, useCallback } from 'react';
 
 // --- Ícones ---
 const EditIcon = () => (
@@ -83,28 +83,21 @@ const ProdutorPage = ({ apiService, token, setNotification }) => {
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [editingProducer, setEditingProducer] = useState(null);
 
-    const fetchProducers = async () => {
+    const fetchProducers = useCallback(async () => {
         setIsLoading(true);
         try {
-            // A "data" já é o JSON retornado pelo apiService
             const data = await apiService.getProducers(token);
-            if (data) {
-                setProducers(data);
-            } else {
-                // Trate o caso de não haver dados, se necessário
-                setProducers([]);
-                setNotification({ message: 'Falha ao carregar produtores.', type: 'error' });
-            }
+            setProducers(data || []);
         } catch (error) {
             setNotification({ message: `Erro de conexão ao carregar produtores: ${error.message}`, type: 'error' });
         } finally {
             setIsLoading(false);
         }
-    };
+    }, [apiService, token, setNotification]);
 
     useEffect(() => {
         fetchProducers();
-    }, [token]);
+    }, [fetchProducers]);
 
     const handleOpenModal = (producer = null) => {
         setEditingProducer(producer);
@@ -118,36 +111,30 @@ const ProdutorPage = ({ apiService, token, setNotification }) => {
 
     const handleSaveProducer = async (producerData) => {
         const producerToSave = editingProducer ? { ...editingProducer, ...producerData } : producerData;
-        const apiCall = editingProducer
-            ? apiService.updateProducer(token, producerToSave.id, producerToSave)
-            : apiService.createProducer(token, producerToSave);
-
+        
         try {
-            const response = await apiCall;
-            if(response.ok) {
-                setNotification({ message: `Produtor ${editingProducer ? 'atualizado' : 'criado'} com sucesso!`, type: 'success' });
-                handleCloseModal();
-                fetchProducers(); // Recarrega a lista
-            } else {
-                setNotification({ message: 'Ocorreu um erro ao salvar.', type: 'error' });
-            }
+            const apiCall = editingProducer
+                ? apiService.updateProducer(token, producerToSave.id, producerToSave)
+                : apiService.createProducer(token, producerToSave);
+            
+            await apiCall;
+            
+            setNotification({ message: `Produtor ${editingProducer ? 'atualizado' : 'criado'} com sucesso!`, type: 'success' });
+            handleCloseModal();
+            fetchProducers(); // Recarrega a lista
         } catch (error) {
-            setNotification({ message: 'Erro de conexão.', type: 'error' });
+            setNotification({ message: `Erro ao salvar: ${error.message}`, type: 'error' });
         }
     };
 
     const handleDeleteProducer = async (id) => {
         if (window.confirm('Tem certeza que deseja excluir este produtor?')) {
             try {
-                const response = await apiService.deleteProducer(token, id);
-                if (response.ok) {
-                    setNotification({ message: 'Produtor excluído com sucesso!', type: 'success' });
-                    fetchProducers(); // Recarrega a lista
-                } else {
-                    setNotification({ message: 'Erro ao excluir produtor.', type: 'error' });
-                }
+                await apiService.deleteProducer(token, id);
+                setNotification({ message: 'Produtor excluído com sucesso!', type: 'success' });
+                fetchProducers(); // Recarrega a lista
             } catch (error) {
-                setNotification({ message: 'Erro de conexão.', type: 'error' });
+                setNotification({ message: `Erro ao excluir: ${error.message}`, type: 'error' });
             }
         }
     };

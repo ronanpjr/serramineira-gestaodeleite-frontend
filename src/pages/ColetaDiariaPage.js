@@ -28,68 +28,60 @@ const ColetaDiariaPage = ({ apiService, token, setNotification }) => {
     const [year, setYear] = useState(new Date().getFullYear());
     const [month, setMonth] = useState(new Date().getMonth() + 1);
     const [collections, setCollections] = useState({});
-    const [isLoading, setIsLoading] = useState(false);
+    const [isLoading, setIsLoading] = useState(true);
     const [saveStatus, setSaveStatus] = useState('saved'); // 'saved', 'unsaved', 'saving', 'error'
 
-    // Ref para o timer do debounce, para que possamos limpá-lo
     const debounceTimeoutRef = useRef(null);
 
     // Efeito para buscar a lista de produtores uma única vez
     useEffect(() => {
         const fetchProducers = async () => {
-            setIsLoading(true);
             try {
-                // A "data" já é o JSON retornado pelo apiService
                 const data = await apiService.getProducers(token);
-                if (data) {
+                if (data && data.length > 0) {
                     setProducers(data);
+                    // Define o primeiro produtor como selecionado por padrão
+                    setSelectedProducerId(data[0].id); 
                 } else {
-                    // Trate o caso de não haver dados, se necessário
                     setProducers([]);
-                    setNotification({ message: 'Falha ao carregar produtores.', type: 'error' });
                 }
             } catch (error) {
-                setNotification({ message: `Erro de conexão ao carregar produtores: ${error.message}`, type: 'error' });
-            } finally {
-                setIsLoading(false);
+                setNotification({ message: `Erro ao carregar produtores: ${error.message}`, type: 'error' });
             }
         };
         fetchProducers();
     }, [token, apiService, setNotification]);
 
     // Efeito para buscar as coletas quando os filtros mudam
-    useEffect(() => {
+    const fetchCollections = useCallback(async () => {
         if (!selectedProducerId || !year || !month) return;
         
-        const fetchCollections = async () => {
-            setIsLoading(true);
-            setSaveStatus('saved'); // Reseta o status ao carregar novos dados
-            if(debounceTimeoutRef.current) clearTimeout(debounceTimeoutRef.current); // Cancela qualquer salvamento pendente
+        setIsLoading(true);
+        setSaveStatus('saved');
+        if(debounceTimeoutRef.current) clearTimeout(debounceTimeoutRef.current);
+        
+        try {
+            // A API já retorna o JSON ou lança um erro
+            const data = await apiService.getColetasPorMes(token, selectedProducerId, year, month);
             
-            try {
-                const response = await apiService.getColetasPorMes(token, selectedProducerId, year, month);
-                const data = response.ok ? await response.json() : [];
-                
-                // Transforma o array de coletas em um mapa [data] -> quantidade
-                const collectionsMap = data.reduce((acc, coleta) => {
-                    // A API retorna a data como "YYYY-MM-DD". Para evitar problemas de fuso horário,
-                    // tratamos ela como UTC para gerar a chave do mapa.
-                    const dateKey = new Date(coleta.data + 'T00:00:00Z').toISOString().split('T')[0];
-                    acc[dateKey] = coleta.quantidadeLitros;
-                    return acc;
-                }, {});
-                setCollections(collectionsMap);
+            const collectionsMap = (data || []).reduce((acc, coleta) => {
+                const dateKey = new Date(coleta.data + 'T00:00:00Z').toISOString().split('T')[0];
+                acc[dateKey] = coleta.quantidadeLitros;
+                return acc;
+            }, {});
+            setCollections(collectionsMap);
 
-            } catch (error) {
-                setNotification({ message: 'Erro de conexão ao buscar coletas.', type: 'error' });
-                setCollections({}); // Limpa coletas em caso de erro
-            } finally {
-                setIsLoading(false);
-            }
-        };
-
-        fetchCollections();
+        } catch (error) {
+            setNotification({ message: `Erro ao buscar coletas: ${error.message}`, type: 'error' });
+            setCollections({});
+        } finally {
+            setIsLoading(false);
+        }
     }, [selectedProducerId, year, month, token, apiService, setNotification]);
+
+    useEffect(() => {
+        fetchCollections();
+    }, [fetchCollections]);
 
 
     // Função de salvamento, agora memoizada com useCallback
@@ -97,7 +89,6 @@ const ColetaDiariaPage = ({ apiService, token, setNotification }) => {
         setSaveStatus('saving');
         
         const payload = Object.entries(currentCollections)
-            // Filtra entradas nulas, vazias ou que não são números
             .filter(([, quantidade]) => quantidade != null && `${quantidade}`.trim() !== '' && !isNaN(quantidade))
             .map(([data, quantidadeLitros]) => ({
                 data,
@@ -105,46 +96,33 @@ const ColetaDiariaPage = ({ apiService, token, setNotification }) => {
                 produtorId: Number(selectedProducerId) 
             }));
         
-        // Se não há nada a salvar, apenas atualiza o status.
         if (payload.length === 0 && Object.values(currentCollections).every(v => v === '' || v == null)) {
             setSaveStatus('saved');
             return;
         }
 
         try {
-            const response = await apiService.salvarColetasEmLote(token, payload);
-            if (response.ok) {
-                setSaveStatus('saved');
-            } else {
-                const errorText = await response.text();
-                setSaveStatus('error');
-                setNotification({ message: `Falha ao salvar: ${errorText || 'Erro desconhecido.'}`, type: 'error' });
-            }
+            await apiService.salvarColetasEmLote(token, payload);
+            setSaveStatus('saved');
         } catch (error) {
             setSaveStatus('error');
-            setNotification({ message: 'Erro de conexão ao salvar as alterações.', type: 'error' });
+            setNotification({ message: `Erro ao salvar: ${error.message}`, type: 'error' });
         }
     }, [selectedProducerId, apiService, token, setNotification]);
 
     
     // Efeito para acionar o debounce. Roda toda vez que 'collections' muda.
     useEffect(() => {
-        // Não faz nada se estiver carregando dados ou se não houver alterações pendentes
         if (isLoading || saveStatus !== 'unsaved') {
             return;
         }
-
-        // Limpa o timer anterior para reiniciar a contagem
         if (debounceTimeoutRef.current) {
             clearTimeout(debounceTimeoutRef.current);
         }
-
-        // Define um novo timer. O salvamento só ocorrerá se não houver mais alterações em 1.5s
         debounceTimeoutRef.current = setTimeout(() => {
             handleSaveChanges(collections);
         }, 1500);
 
-        // Função de limpeza: cancela o timer se o componente for desmontado
         return () => {
             if (debounceTimeoutRef.current) {
                 clearTimeout(debounceTimeoutRef.current);

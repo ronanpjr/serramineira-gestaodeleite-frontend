@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 
-// --- Ícones ---
+// --- Ícones (código omitido para brevidade) ---
 const PlusIcon = () => <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>;
 const EditIcon = () => <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" /><path d="m15 5 4 4" /></svg>;
 const TrashIcon = () => <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" /><path d="M10 11v6" /><path d="M14 11v6" /><path d="M5 6l1.4-2.8A2 2 0 0 1 8.2 2h7.6a2 2 0 0 1 1.8 1.2L19 6" /></svg>;
@@ -21,7 +21,8 @@ const FechamentoModal = ({ isOpen, onClose, onSave, producers, fechamento }) => 
         if (!isOpen) return;
 
         if (fechamento) { // Modo Edição
-            setSelectedProducerId(fechamento.produtor.id);
+            // CORRIGIDO: Acessar produtorId diretamente
+            setSelectedProducerId(fechamento.produtorId);
             setMonth(fechamento.mes);
             setYear(fechamento.ano);
             setPrecoLitro(fechamento.precoLitro || '');
@@ -136,8 +137,9 @@ const PrintableReport = ({ reportData }) => {
 
             <section className="mb-6">
                 <h2 className="text-xl font-semibold border-b pb-2 mb-3">Dados do Produtor</h2>
-                <p><strong>Produtor:</strong> {fechamento.produtor.nome}</p>
-                <p><strong>Linha/Região:</strong> {fechamento.produtor.linha || 'Não informada'}</p>
+                {/* CORRIGIDO: Acessar produtorNome diretamente */}
+                <p><strong>Produtor:</strong> {fechamento.produtorNome}</p>
+                {/* A linha/região não vem mais no novo schema, então foi removida para evitar erros */}
             </section>
 
             <section className="mb-6">
@@ -201,45 +203,26 @@ const FechamentoPage = ({ apiService, token, setNotification }) => {
     const [bulkReportData, setBulkReportData] = useState(null);
     const [isPrinting, setIsPrinting] = useState(false);
 
-    const fetchFechamentos = useCallback(async () => {
+    const fetchAllData = useCallback(async () => {
         setIsLoading(true);
         try {
-            const response = await apiService.getFechamentos(token);
-            if (response.ok) {
-                const data = await response.json();
-                setFechamentos(data);
-            } else {
-                setNotification({ message: 'Falha ao carregar fechamentos.', type: 'error' });
-            }
+            const [producersData, fechamentosData] = await Promise.all([
+                apiService.getProducers(token),
+                apiService.getFechamentos(token)
+            ]);
+
+            setProducers(producersData || []);
+            setFechamentos(fechamentosData || []);
         } catch (error) {
-            setNotification({ message: 'Erro de conexão.', type: 'error' });
+            setNotification({ message: `Erro ao carregar dados: ${error.message}`, type: 'error' });
         } finally {
             setIsLoading(false);
         }
     }, [apiService, token, setNotification]);
     
     useEffect(() => {
-        const fetchProducers = async () => {
-            setIsLoading(true);
-            try {
-                // A "data" já é o JSON retornado pelo apiService
-                const data = await apiService.getProducers(token);
-                if (data) {
-                    setProducers(data);
-                } else {
-                    // Trate o caso de não haver dados, se necessário
-                    setProducers([]);
-                    setNotification({ message: 'Falha ao carregar produtores.', type: 'error' });
-                }
-            } catch (error) {
-                setNotification({ message: `Erro de conexão ao carregar produtores: ${error.message}`, type: 'error' });
-            } finally {
-                setIsLoading(false);
-            }
-        };
-        fetchProducers();
-        fetchFechamentos();
-    }, [fetchFechamentos, apiService, token, setNotification]);
+        fetchAllData();
+    }, [fetchAllData]);
 
     useEffect(() => {
         const handleAfterPrint = () => {
@@ -267,37 +250,28 @@ const FechamentoPage = ({ apiService, token, setNotification }) => {
     };
 
     const handleSaveFechamento = async (data) => {
-        const apiCall = editingFechamento
-            ? apiService.atualizarPagamentoFechamento(token, editingFechamento.id, data)
-            : apiService.createFechamento(token, data);
-        
         try {
-            const response = await apiCall;
-            if (response.ok) {
-                setNotification({ message: `Fechamento ${editingFechamento ? 'atualizado' : 'gerado'} com sucesso!`, type: 'success' });
-                handleCloseModal();
-                fetchFechamentos();
-            } else {
-                const errorData = await response.text();
-                setNotification({ message: `Erro: ${errorData || 'Não foi possível salvar.'}`, type: 'error' });
-            }
+            const apiCall = editingFechamento
+                ? apiService.atualizarPagamentoFechamento(token, editingFechamento.id, data)
+                : apiService.createFechamento(token, data);
+            
+            await apiCall;
+            setNotification({ message: `Fechamento ${editingFechamento ? 'atualizado' : 'gerado'} com sucesso!`, type: 'success' });
+            handleCloseModal();
+            fetchAllData();
         } catch (error) {
-            setNotification({ message: 'Erro de conexão.', type: 'error' });
+            setNotification({ message: `Erro: ${error.message || 'Não foi possível salvar.'}`, type: 'error' });
         }
     };
     
     const handleDelete = async (id) => {
         if (window.confirm('Tem certeza que deseja excluir este fechamento? Esta ação não pode ser desfeita.')) {
             try {
-                const response = await apiService.deleteFechamento(token, id);
-                if (response.ok || response.status === 204) {
-                    setNotification({ message: 'Fechamento excluído com sucesso.', type: 'success' });
-                    fetchFechamentos();
-                } else {
-                    setNotification({ message: 'Erro ao excluir.', type: 'error' });
-                }
+                await apiService.deleteFechamento(token, id);
+                setNotification({ message: 'Fechamento excluído com sucesso.', type: 'success' });
+                fetchAllData();
             } catch (error) {
-                setNotification({ message: 'Erro de conexão.', type: 'error' });
+                setNotification({ message: `Erro ao excluir: ${error.message}`, type: 'error' });
             }
         }
     };
@@ -311,27 +285,20 @@ const FechamentoPage = ({ apiService, token, setNotification }) => {
                 dataPagamento: new Date().toISOString().split('T')[0]
             };
             try {
-                const response = await apiService.atualizarPagamentoFechamento(token, id, data);
-                if (response.ok) {
-                    setNotification({ message: 'Fechamento marcado como pago.', type: 'success' });
-                    fetchFechamentos();
-                } else {
-                    setNotification({ message: 'Erro ao marcar como pago.', type: 'error' });
-                }
+                await apiService.atualizarPagamentoFechamento(token, id, data);
+                setNotification({ message: 'Fechamento marcado como pago.', type: 'success' });
+                fetchAllData();
             } catch (error) {
-                setNotification({ message: 'Erro de conexão.', type: 'error' });
+                setNotification({ message: `Erro ao marcar como pago: ${error.message}`, type: 'error' });
             }
         }
     };
 
     const handlePrint = async (fechamento) => {
         try {
-            const res = await apiService.getColetasPorMes(token, fechamento.produtor.id, fechamento.ano, fechamento.mes);
-            if (!res.ok) {
-                throw new Error('Não foi possível buscar as coletas para impressão.');
-            }
-            const coletas = await res.json();
-            setReportData({ fechamento, coletas });
+            // CORRIGIDO: Acessar produtorId diretamente
+            const coletas = await apiService.getColetasPorMes(token, fechamento.produtorId, fechamento.ano, fechamento.mes);
+            setReportData({ fechamento, coletas: coletas || [] });
         } catch (error) {
             setNotification({ message: error.message, type: 'error' });
         }
@@ -346,13 +313,9 @@ const FechamentoPage = ({ apiService, token, setNotification }) => {
         try {
             const reports = await Promise.all(
                 fechamentos.map(async (fechamento) => {
-                    const res = await apiService.getColetasPorMes(token, fechamento.produtor.id, fechamento.ano, fechamento.mes);
-                    if (!res.ok) {
-                        console.error(`Falha ao buscar coletas para ${fechamento.produtor.nome}`);
-                        return { fechamento, coletas: [] };
-                    }
-                    const coletas = await res.json();
-                    return { fechamento, coletas };
+                    // CORRIGIDO: Acessar produtorId diretamente
+                    const coletas = await apiService.getColetasPorMes(token, fechamento.produtorId, fechamento.ano, fechamento.mes);
+                    return { fechamento, coletas: coletas || [] };
                 })
             );
             setBulkReportData(reports);
@@ -402,7 +365,8 @@ const FechamentoPage = ({ apiService, token, setNotification }) => {
                     <tbody className="bg-white divide-y divide-gray-200">
                         {fechamentos.map((f) => (
                             <tr key={f.id} className="hover:bg-gray-50">
-                                <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{f.produtor?.nome || 'N/A'}</td>
+                                {/* CORREÇÃO PRINCIPAL: Acessar f.produtorNome */}
+                                <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{f.produtorNome || 'N/A'}</td>
                                 <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{`${String(f.mes).padStart(2, '0')}/${f.ano}`}</td>
                                 <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{f.totalLitros} L</td>
                                 <td className="px-6 py-4 whitespace-nowrap text-sm font-bold text-gray-800">{formatCurrency(f.totalLiquido)}</td>

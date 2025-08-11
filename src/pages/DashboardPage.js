@@ -5,7 +5,8 @@ import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, Responsive
 import { UsersIcon, MilkIcon, CalendarIcon, ClipboardIcon } from '../components/icons';
 
 const DashboardPage = ({ token, setNotification }) => {
-    const [stats, setStats] = useState({ produtoresAtivos: 0, litrosColetadosMes: 0, pagamentosPendentes: 0, coletasHoje: 0 });
+    // Adicionado novo estado para a contagem de fechamentos pendentes
+    const [stats, setStats] = useState({ produtoresAtivos: 0, litrosColetadosMes: 0, pagamentosPendentes: 0, fechamentosPendentes: 0 });
     const [chartData, setChartData] = useState([]);
     const [isLoading, setIsLoading] = useState(true);
 
@@ -13,53 +14,58 @@ const DashboardPage = ({ token, setNotification }) => {
         const fetchData = async () => {
             setIsLoading(true);
             try {
-                // Buscar todos os dados necessários em paralelo
                 const [producers, collections, closings] = await Promise.all([
                     apiService.getProducers(token),
                     apiService.getColetas(token),
                     apiService.getFechamentos(token),
                 ]);
 
-                // --- Calcular Estatísticas ---
                 const today = new Date();
                 const currentMonth = today.getMonth() + 1;
                 const currentYear = today.getFullYear();
-                const todayString = today.toISOString().split('T')[0];
 
-                const produtoresAtivos = producers.filter(p => p.ativo).length;
+                const activeProducers = (producers || []).filter(p => p.ativo);
+                const produtoresAtivos = activeProducers.length;
 
-                const litrosColetadosMes = collections
+                const litrosColetadosMes = (collections || [])
                     .filter(c => {
                         const d = new Date(c.data);
                         return d.getMonth() + 1 === currentMonth && d.getFullYear() === currentYear;
                     })
                     .reduce((acc, c) => acc + c.quantidadeLitros, 0);
-
-                const coletasHoje = collections
-                    .filter(c => c.data.startsWith(todayString))
-                    .reduce((acc, c) => acc + c.quantidadeLitros, 0);
                 
-                const pagamentosPendentes = closings
+                const pagamentosPendentes = (closings || [])
                     .filter(f => f.statusPagamento === 'Pendente')
                     .reduce((acc, f) => acc + f.totalLiquido, 0);
 
-                setStats({ produtoresAtivos, litrosColetadosMes, pagamentosPendentes, coletasHoje });
+                // --- LÓGICA DO NOVO CARD ---
+                // 1. Pega os IDs de todos os produtores que JÁ TÊM fechamento para o mês/ano atual.
+                const producersWithClosing = new Set(
+                    (closings || [])
+                        .filter(f => f.mes === currentMonth && f.ano === currentYear)
+                        .map(f => f.produtorId)
+                );
+                
+                // 2. Conta quantos produtores ativos NÃO ESTÃO na lista de quem já tem fechamento.
+                const fechamentosPendentes = activeProducers.filter(p => !producersWithClosing.has(p.id)).length;
 
 
-                // --- Calcular Dados do Gráfico (Últimos 6 meses) ---
+                setStats({ produtoresAtivos, litrosColetadosMes, pagamentosPendentes, fechamentosPendentes });
+
+                // --- Lógica do Gráfico (sem alterações) ---
                 const monthlyProduction = {};
                 for (let i = 5; i >= 0; i--) {
                     const d = new Date(today.getFullYear(), today.getMonth() - i, 1);
-                    const monthName = d.toLocaleString('pt-BR', { month: 'long' });
-                    const year = d.getFullYear();
+                    const monthName = d.toLocaleString('pt-BR', { month: 'short' });
+                    const year = d.getFullYear().toString().slice(-2);
                     const monthKey = `${monthName.charAt(0).toUpperCase() + monthName.slice(1)}/${year}`;
                     monthlyProduction[monthKey] = 0;
                 }
 
-                collections.forEach(c => {
+                (collections || []).forEach(c => {
                     const d = new Date(c.data);
-                    const monthName = d.toLocaleString('pt-BR', { month: 'long' });
-                    const year = d.getFullYear();
+                    const monthName = d.toLocaleString('pt-BR', { month: 'short' });
+                    const year = d.getFullYear().toString().slice(-2);
                     const monthKey = `${monthName.charAt(0).toUpperCase() + monthName.slice(1)}/${year}`;
                     if (monthKey in monthlyProduction) {
                         monthlyProduction[monthKey] += c.quantidadeLitros;
@@ -80,15 +86,17 @@ const DashboardPage = ({ token, setNotification }) => {
             }
         };
         fetchData();
-    }, [token, setNotification]);
+    }, [token, apiService, setNotification]);
 
     const formatCurrency = (value) => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(value || 0);
 
+    // --- ATUALIZAÇÃO DOS CARDS ---
     const summaryData = [
         { title: "Produtores Ativos", value: stats.produtoresAtivos, icon: <UsersIcon />, color: "blue" },
         { title: "Litros Coletados (Mês)", value: `${stats.litrosColetadosMes.toLocaleString('pt-BR')} L`, icon: <MilkIcon />, color: "green" },
         { title: "Pagamentos Pendentes", value: formatCurrency(stats.pagamentosPendentes), icon: <CalendarIcon />, color: "orange" },
-        { title: "Coletas Hoje", value: `${stats.coletasHoje.toLocaleString('pt-BR')} L`, icon: <ClipboardIcon />, color: "indigo" },
+        // SUBSTITUÍDO: O card "Coletas Hoje" foi trocado por "Fechamentos Pendentes"
+        { title: "Fechamentos Pendentes (Mês)", value: stats.fechamentosPendentes, icon: <ClipboardIcon />, color: "indigo" },
     ];
 
     const colorMapping = { blue: 'border-blue-500', green: 'border-green-500', orange: 'border-orange-500', indigo: 'border-indigo-500' };
@@ -110,7 +118,7 @@ const DashboardPage = ({ token, setNotification }) => {
                         </div>
                         <div>
                             <p className="text-gray-500 text-sm">{item.title}</p>
-                            <p className="text-2xl font-bold text-gray-800">{item.value}</p>
+                            <p className="text-xl font-bold text-gray-800 break-words">{item.value}</p>
                         </div>
                     </div>
                 ))}
@@ -120,7 +128,7 @@ const DashboardPage = ({ token, setNotification }) => {
                 <h2 className="text-xl font-semibold text-gray-700 mb-4">Produção Semestral (Litros)</h2>
                 <div style={{ width: '100%', height: 300 }}>
                      <ResponsiveContainer>
-                        <BarChart data={chartData}>
+                        <BarChart data={chartData} margin={{ top: 5, right: 20, left: -10, bottom: 5 }}>
                             <CartesianGrid strokeDasharray="3 3" />
                             <XAxis dataKey="name" />
                             <YAxis />
